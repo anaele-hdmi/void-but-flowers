@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Void (But Flowers)</title>
+<style>
+    :root {
+        --glow-green: #33ff33;
+        --dim-green: #0a440a;
+        --bg-dark: #010401;
+        --ui-bg: rgba(5, 15, 5, 0.92);
+    }
+    body, html {
+        margin: 0; padding: 0; width: 100%; height: 100%;
+        background-color: var(--bg-dark); color: var(--glow-green);
+        font-family: 'Courier New', Courier, monospace; overflow: hidden;
+    }
+    canvas#mainCanvas { display: block; }
+    
+    .overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: 
+            repeating-linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,0.2) 50%),
+            radial-gradient(circle, transparent 50%, rgba(0,0,0,0.6) 100%);
+        background-size: 100% 4px, 100% 100%; pointer-events: none; z-index: 10;
+    }
+
+    .panel {
+        position: fixed; background: var(--ui-bg); border: 1px solid var(--glow-green);
+        padding: 12px; backdrop-filter: blur(10px); z-index: 20; box-shadow: 0 0 15px rgba(0,255,0,0.15);
+    }
+    #system-console { top: 20px; right: 20px; width: 250px; }
+    #graph-console { bottom: 20px; right: 20px; width: 280px; }
+    
+    .panel-header {
+        display: flex; justify-content: space-between; border-bottom: 1px solid var(--glow-green);
+        margin-bottom: 10px; padding-bottom: 4px; font-size: 0.8rem; font-weight: bold; cursor: pointer;
+    }
+    .panel-content { overflow: hidden; }
+    .stat-row { display: flex; justify-content: space-between; font-size: 0.75rem; margin: 4px 0; }
+    .controls { display: grid; gap: 6px; margin-top: 10px; }
+    
+    button {
+        background: transparent; color: var(--glow-green); border: 1px solid var(--glow-green);
+        padding: 4px; cursor: pointer; font-family: inherit; font-size: 0.7rem; transition: 0.2s;
+    }
+    button:hover { background: var(--glow-green); color: var(--bg-dark); }
+    input[type=range] { width: 100%; accent-color: var(--glow-green); }
+
+    canvas#graphCanvas {
+        background: #000; border: 1px solid var(--dim-green); margin-top: 10px; box-shadow: inset 0 0 10px #000;
+    }
+
+    #audio-toggle {
+        position: fixed; top: 20px; left: 20px; font-size: 24px; cursor: pointer; z-index: 30; opacity: 0.6; transition: 0.3s;
+    }
+    #audio-toggle:hover { opacity: 1; }
+    
+    .legend-graph { font-size: 0.65rem; color: #88ff88; margin-top: 5px; opacity: 0.8; line-height: 1.2; }
+</style>
+</head>
+<body>
+
+<div class="overlay"></div>
+<div id="audio-toggle" onclick="toggleAudio()">🔈</div>
+
+<div id="system-console" class="panel">
+    <div class="panel-header" onclick="togglePanel('system-content', this)">
+        <span>VOID (BUT FLOWERS)</span><span class="toggle-icon">_</span>
+    </div>
+    <div id="system-content" class="panel-content">
+        <div class="stat-row"><span>GEN:</span><span id="gen-count">0</span></div>
+        <div class="stat-row"><span>POP:</span><span id="pop-count">0</span></div>
+        <div class="controls">
+            <label style="font-size: 0.6rem;">PULSE RATE (FPS)</label>
+            <input type="range" id="speed-range" min="1" max="60" value="20">
+            <button onclick="toggleRunning()">[ PLAY / PAUSE ]</button>
+            <button onclick="clearGrid()">[ PURGE VOID ]</button>
+            <button onclick="randomSeed()">[ INJECT SEEDS ]</button>
+        </div>
+    </div>
+</div>
+
+<div id="graph-console" class="panel">
+    <div class="panel-header" onclick="togglePanel('graph-content', this)">
+        <span>ANALYTIC RADAR</span><span class="toggle-icon">_</span>
+    </div>
+    <div id="graph-content" class="panel-content">
+        <canvas id="graphCanvas" width="254" height="120"></canvas>
+        <div class="legend-graph">
+            - DENSITY (Solid)  - ENTROPY (Dot)<br>
+            - VOLATILITY (Fill) - MEMORY (Bright)
+        </div>
+    </div>
+</div>
+
+<canvas id="mainCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const gCanvas = document.getElementById('graphCanvas');
+    const gCtx = gCanvas.getContext('2d');
+    const audioToggle = document.getElementById('audio-toggle');
+    
+    let cellSize = 10;
+    let cols, rows, grid, phosphor, nextGrid;
+    let generation = 0, running = true, lastTime = 0, isDrawing = false;
+    let history = []; const maxHistory = 150;
+    
+    let audioCtx = null, isAudioEnabled = false;
+    let prevPatternCounts = {};
+    let lastPlayed = {};
+
+    // 10パターンの厳密なオフセット定義（[x, y]）
+    const SIGNATURES = {
+        block: [[0,0],[1,0],[0,1],[1,1]],
+        tub: [[1,0],[0,1],[2,1],[1,2]],
+        boat: [[0,0],[1,0],[0,1],[2,1],[1,2]],
+        beehive: [[1,0],[2,0],[0,1],[3,1],[1,2],[2,2]],
+        loaf: [[1,0],[2,0],[0,1],[3,1],[1,2],[3,2],[2,3]],
+        blinker: [[0,0],[1,0],[2,0]],
+        toad: [[1,0],[2,0],[3,0],[0,1],[1,1],[2,1]],
+        beacon: [[0,0],[1,0],[0,1],[3,2],[2,3],[3,3]],
+        glider: [[1,0],[2,1],[0,2],[1,2],[2,2]],
+        lwss: [[1,0],[4,0],[0,1],[0,2],[4,2],[0,3],[1,3],[2,3],[3,3]]
+    };
+
+    function init() {
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+        cols = Math.ceil(canvas.width / cellSize); rows = Math.ceil(canvas.height / cellSize);
+        grid = new Float32Array(cols * rows); nextGrid = new Float32Array(cols * rows);
+        phosphor = new Float32Array(cols * rows);
+        Object.keys(SIGNATURES).forEach(k => { prevPatternCounts[k] = 0; lastPlayed[k] = 0; });
+        clearGrid(); requestAnimationFrame(loop);
+    }
+
+    function togglePanel(id, headerEl) {
+        const content = document.getElementById(id);
+        const icon = headerEl.querySelector('.toggle-icon');
+        if (content.style.display === 'none') { content.style.display = 'block'; icon.innerText = '_'; } 
+        else { content.style.display = 'none'; icon.innerText = '□'; }
+    }
+
+    function toggleAudio() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!isAudioEnabled) {
+            audioCtx.resume(); isAudioEnabled = true;
+            audioToggle.innerText = '🔊'; audioToggle.style.opacity = '1';
+        } else {
+            audioCtx.suspend(); isAudioEnabled = false;
+            audioToggle.innerText = '🔈'; audioToggle.style.opacity = '0.6';
+        }
+    }
+
+    function playSynthesizedSE(type) {
+        if (!isAudioEnabled || !audioCtx) return;
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        
+        // 音響設計：パターンごとのエンベロープとピッチ
+        switch(type) {
+            case 'block': osc.type = 'sine'; osc.frequency.setValueAtTime(130.8, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.1, now + 0.5); gain.gain.linearRampToValueAtTime(0, now + 2.0); osc.start(now); osc.stop(now + 2.0); break;
+            case 'tub': osc.type = 'triangle'; osc.frequency.setValueAtTime(164.8, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.05, now + 0.2); gain.gain.linearRampToValueAtTime(0, now + 1.0); osc.start(now); osc.stop(now + 1.0); break;
+            case 'boat': osc.type = 'sine'; osc.frequency.setValueAtTime(196.0, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.06, now + 0.3); gain.gain.linearRampToValueAtTime(0, now + 1.5); osc.start(now); osc.stop(now + 1.5); break;
+            case 'beehive': osc.type = 'sine'; osc.frequency.setValueAtTime(220.0, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.08, now + 0.4); gain.gain.linearRampToValueAtTime(0, now + 2.0); osc.start(now); osc.stop(now + 2.0); break;
+            case 'loaf': osc.type = 'triangle'; osc.frequency.setValueAtTime(261.6, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.07, now + 0.5); gain.gain.linearRampToValueAtTime(0, now + 2.5); osc.start(now); osc.stop(now + 2.5); break;
+            case 'blinker': osc.type = 'sine'; osc.frequency.setValueAtTime(659.2, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.04, now + 0.05); gain.gain.linearRampToValueAtTime(0, now + 0.5); osc.start(now); osc.stop(now + 0.5); break;
+            case 'toad': osc.type = 'square'; osc.frequency.setValueAtTime(392.0, now); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.02, now + 0.1); gain.gain.linearRampToValueAtTime(0, now + 0.8); osc.start(now); osc.stop(now + 0.8); break;
+            case 'beacon': osc.type = 'sine'; osc.frequency.setValueAtTime(440.0, now); osc.frequency.linearRampToValueAtTime(523.2, now + 0.2); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.05, now + 0.1); gain.gain.linearRampToValueAtTime(0, now + 1.0); osc.start(now); osc.stop(now + 1.0); break;
+            case 'glider': osc.type = 'sine'; osc.frequency.setValueAtTime(523.2, now); osc.frequency.exponentialRampToValueAtTime(659.2, now + 1.0); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.05, now + 0.2); gain.gain.linearRampToValueAtTime(0, now + 1.0); osc.start(now); osc.stop(now + 1.0); break;
+            case 'lwss': osc.type = 'triangle'; osc.frequency.setValueAtTime(659.2, now); osc.frequency.linearRampToValueAtTime(880.0, now + 0.5); gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.04, now + 0.1); gain.gain.linearRampToValueAtTime(0, now + 0.8); osc.start(now); osc.stop(now + 0.8); break;
+        }
+    }
+
+    function checkPatternIsolated(startX, startY, offsets) {
+        let minX = 0, maxX = 0, minY = 0, maxY = 0;
+        for (let [ox, oy] of offsets) {
+            if (startX + ox >= cols || startY + oy >= rows) return false;
+            if (grid[(startY + oy) * cols + (startX + ox)] === 0) return false;
+            minX = Math.min(minX, ox); maxX = Math.max(maxX, ox);
+            minY = Math.min(minY, oy); maxY = Math.max(maxY, oy);
+        }
+        // 周囲1セルの空白確認（孤立判定）
+        for (let y = minY - 1; y <= maxY + 1; y++) {
+            for (let x = minX - 1; x <= maxX + 1; x++) {
+                const isPart = offsets.some(([ox, oy]) => ox === x && oy === y);
+                if (!isPart) {
+                    const cx = startX + x, cy = startY + y;
+                    if (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
+                        if (grid[cy * cols + cx] !== 0) return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    function analyzePatterns() {
+        let counts = {}; Object.keys(SIGNATURES).forEach(k => counts[k] = 0);
+        // 軽量化のため、数フレームに1回、またはアクティブセルのみを起点にスキャン
+        for (let y = 1; y < rows - 5; y+=2) {
+            for (let x = 1; x < cols - 5; x+=2) {
+                if (grid[y*cols+x] === 0 && grid[y*cols+(x+1)] === 0) continue;
+                for (const [name, offsets] of Object.entries(SIGNATURES)) {
+                    if (checkPatternIsolated(x, y, offsets)) counts[name]++;
+                }
+            }
+        }
+        const now = Date.now();
+        for (const name of Object.keys(counts)) {
+            if (counts[name] > prevPatternCounts[name] && now - lastPlayed[name] > 800) {
+                playSynthesizedSE(name); lastPlayed[name] = now;
+            }
+        }
+        prevPatternCounts = counts;
+    }
+
+    function clearGrid() {
+        generation = 0; grid.fill(0); phosphor.fill(0); history = [];
+        Object.keys(prevPatternCounts).forEach(k => prevPatternCounts[k] = 0);
+        draw();
+    }
+
+    function randomSeed() {
+        for (let i = 0; i < grid.length; i++) {
+            if (Math.random() > 0.94) { grid[i] = 1; phosphor[i] = 1.0; }
+        }
+        draw();
+    }
+
+    function update() {
+        let population = 0, volatility = 0, totalPhosphor = 0;
+        for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+                let neighbors = 0;
+                for (let i = -1; i <= 1; i++) {
+                    for (let j = -1; j <= 1; j++) {
+                        if (i === 0 && j === 0) continue;
+                        const nx = x + i, ny = y + j;
+                        if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) neighbors += grid[ny * cols + nx];
+                    }
+                }
+                const idx = y * cols + x; const state = grid[idx]; let nextState = 0;
+                if (state === 1 && (neighbors === 2 || neighbors === 3)) nextState = 1;
+                else if (state === 0 && neighbors === 3) nextState = 1;
+
+                if (state !== nextState) volatility++;
+                nextGrid[idx] = nextState;
+                if (nextState === 1) { phosphor[idx] = 1.0; population++; } 
+                else { phosphor[idx] *= 0.88; }
+                totalPhosphor += phosphor[idx];
+            }
+        }
+        grid.set(nextGrid); generation++;
+        
+        document.getElementById('gen-count').innerText = generation;
+        document.getElementById('pop-count').innerText = population;
+
+        const total = cols * rows;
+        const p1 = population / total; const p0 = 1 - p1;
+        const entropy = -( (p1 > 0 ? p1 * Math.log2(p1) : 0) + (p0 > 0 ? p0 * Math.log2(p0) : 0) );
+        const avgPhosphor = totalPhosphor / total;
+        const volRate = volatility / total;
+
+        history.push({ density: p1, entropy: entropy, volatility: volRate, memory: avgPhosphor });
+        if (history.length > maxHistory) history.shift();
+        
+        analyzePatterns();
+    }
+
+    function draw() {
+        ctx.fillStyle = '#010401'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        for (let i = 0; i < phosphor.length; i++) {
+            if (phosphor[i] > 0.01) {
+                const x = (i % cols) * cellSize, y = Math.floor(i / cols) * cellSize;
+                const g = Math.floor(phosphor[i] * 200) + 55;
+                ctx.fillStyle = `rgb(0, ${g}, 0)`;
+                ctx.fillRect(x + 1, y + 1, cellSize - 1, cellSize - 1);
+            }
+        }
+        
+        // アート的グラフ描画（加算合成）
+        gCtx.fillStyle = '#010301'; gCtx.fillRect(0, 0, gCanvas.width, gCanvas.height);
+        if (history.length < 2) return;
+        gCtx.globalCompositeOperation = 'lighter';
+        
+        const w = gCanvas.width, h = gCanvas.height;
+        const step = w / maxHistory;
+
+        // 1. Volatility (Area Fill)
+        gCtx.fillStyle = 'rgba(20, 100, 20, 0.3)';
+        gCtx.beginPath(); gCtx.moveTo(0, h);
+        history.forEach((d, i) => gCtx.lineTo(i * step, h - (d.volatility * 2000)));
+        gCtx.lineTo(w, h); gCtx.fill();
+
+        // 2. Entropy (Dotted)
+        gCtx.strokeStyle = 'rgba(0, 150, 0, 0.8)'; gCtx.lineWidth = 1; gCtx.setLineDash([2, 4]);
+        gCtx.beginPath();
+        history.forEach((d, i) => i===0 ? gCtx.moveTo(0, h-(d.entropy*80)) : gCtx.lineTo(i*step, h-(d.entropy*80)));
+        gCtx.stroke(); gCtx.setLineDash([]);
+
+        // 3. Density (Solid)
+        gCtx.strokeStyle = '#33ff33'; gCtx.lineWidth = 1.5;
+        gCtx.beginPath();
+        history.forEach((d, i) => i===0 ? gCtx.moveTo(0, h-(d.density*800)) : gCtx.lineTo(i*step, h-(d.density*800)));
+        gCtx.stroke();
+
+        // 4. Memory (Bright Thin)
+        gCtx.strokeStyle = '#aaffaa'; gCtx.lineWidth = 0.5;
+        gCtx.beginPath();
+        history.forEach((d, i) => i===0 ? gCtx.moveTo(0, h-(d.memory*800)) : gCtx.lineTo(i*step, h-(d.memory*800)));
+        gCtx.stroke();
+        
+        gCtx.globalCompositeOperation = 'source-over';
+    }
+
+    function loop(time) {
+        if (!running) return;
+        const fpsInterval = 1000 / document.getElementById('speed-range').value;
+        if (time - lastTime > fpsInterval) { update(); draw(); lastTime = time; }
+        requestAnimationFrame(loop);
+    }
+
+    function toggleRunning() { running = !running; if (running) requestAnimationFrame(loop); }
+
+    function handleInput(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const x = Math.floor((clientX - rect.left) / cellSize), y = Math.floor((clientY - rect.top) / cellSize);
+        if (x >= 0 && x < cols && y >= 0 && y < rows) {
+            grid[y * cols + x] = 1; phosphor[y * cols + x] = 1.0; draw();
+        }
+    }
+
+    canvas.addEventListener('mousedown', (e) => { isDrawing = true; handleInput(e); });
+    canvas.addEventListener('mousemove', (e) => { if (isDrawing) handleInput(e); });
+    window.addEventListener('mouseup', () => isDrawing = false);
+    window.addEventListener('resize', init);
+    init();
+</script>
+</body>
+</html>
