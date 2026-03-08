@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Void (But Flowers) - v14</title>
+<title>Void (But Flowers) - v16</title>
 <style>
     :root {
         --glow-green: #33ff33;
@@ -188,7 +188,6 @@
                 const euler = new THREE.Euler(0,0,0,'YXZ'); 
                 euler.setFromQuaternion(camera.quaternion); 
                 euler.y-=dx*0.005; euler.x-=dy*0.005; 
-                // BUG FIXED: Math.maxとMath.minを正しく組み合わせてピッチを制限
                 euler.x = Math.max(-1.5, Math.min(1.5, euler.x)); 
                 camera.quaternion.setFromEuler(euler); 
             }
@@ -211,19 +210,18 @@
         const target = new THREE.Vector3(); ray.ray.at(20, target);
         const cx = Math.floor(target.x+CENTER), cy = Math.floor(target.y+CENTER), cz = Math.floor(target.z+CENTER);
         for(let dz=-4; dz<=4; dz++) for(let dy=-4; dy<=4; dy++) for(let dx=-4; dx<=4; dx++) {
-            if(dx*dx+dy*dy+dz*dz <= 16 && Math.random()>0.85) {
-                // トーラス境界を適用したシーディング
+            if(dx*dx+dy*dy+dz*dz <= 16 && Math.random()>0.92) {
                 const nx = (cx+dx+SIZE)%SIZE, ny = (cy+dy+SIZE)%SIZE, nz = (cz+dz+SIZE)%SIZE;
                 const i = getI(nx,ny,nz); grid[i] = 1; phosphor[i] = 1.0;
             }
         }
     }
     
-    function randomClusters() {
-        for(let c=0; c<12; c++) {
+    function randomClusters(count = 12) {
+        for(let c=0; c<count; c++) {
             const cx = Math.floor(Math.random()*SIZE), cy = Math.floor(Math.random()*SIZE), cz = Math.floor(Math.random()*SIZE);
             for(let dz=-3; dz<=3; dz++) for(let dy=-3; dy<=3; dy++) for(let dx=-3; dx<=3; dx++) {
-                if(dx*dx+dy*dy+dz*dz <= 9 && Math.random()>0.75) {
+                if(dx*dx+dy*dy+dz*dz <= 9 && Math.random()>0.85) {
                     const nx = (cx+dx+SIZE)%SIZE, ny = (cy+dy+SIZE)%SIZE, nz = (cz+dz+SIZE)%SIZE;
                     const i = getI(nx,ny,nz); grid[i] = 1; phosphor[i] = 1.0;
                 }
@@ -234,16 +232,17 @@
     function runAutoPilot() {
         if (!isMVGA) return;
         
-        // MVGA強化: 全滅を防ぐためのランダムインジェクションを強化
-        if (currentDensity < 0.05 && currentEntropy < 0.2) {
-            randomClusters();
-            if (currentDensity < 0.01) randomClusters(); // 深刻な過疎の場合は2倍注入
-            return;
-        }
+        let bM = parseInt(bMinIn.value);
         
-        if (currentEntropy < 0.1 && Math.random() > 0.5) {
-            let bM = parseInt(bMinIn.value);
-            bMinIn.value = bM === 5 ? 4 : 5; 
+        if (currentDensity > 0.05) {
+            bM = 6;
+        } else if (currentDensity < 0.02) {
+            bM = 5;
+        }
+        bMinIn.value = bM;
+
+        if (currentDensity < 0.01 && currentEntropy < 0.1) {
+            randomClusters(5);
         }
     }
 
@@ -254,12 +253,10 @@
         const capacityStress = Math.max(0, (currentDensity - 0.20) / 0.10); 
         const deathProb = Math.min(0.8, capacityStress * 0.8);
 
-        // トーラス境界（端をループさせる）ため、0 から SIZE まで回す
         for(let z=0; z<SIZE; z++) for(let y=0; y<SIZE; y++) for(let x=0; x<SIZE; x++) {
             let n = 0; const i = getI(x,y,z);
             for(let dz=-1; dz<=1; dz++) for(let dy=-1; dy<=1; dy++) for(let dx=-1; dx<=1; dx++) { 
                 if(dx===0&&dy===0&&dz===0) continue; 
-                // 座標をループさせて近傍を取得（循環宇宙）
                 const nx = (x+dx+SIZE)%SIZE;
                 const ny = (y+dy+SIZE)%SIZE;
                 const nz = (z+dz+SIZE)%SIZE;
@@ -287,7 +284,7 @@
         if(history.length>MAX_HIST) history.shift();
         if(isAudioEnabled && pop>0 && Date.now()-lastSETime>200) { playSE(vol); lastSETime=Date.now(); }
 
-        if (generation % 60 === 0) runAutoPilot();
+        runAutoPilot();
     }
 
     function playSE(v) {
@@ -320,12 +317,17 @@
         gCtx.strokeStyle='#aaffaa'; gCtx.lineWidth=0.5; gCtx.beginPath(); history.forEach((d,i)=>i===0?gCtx.moveTo(0,h-d.m*4000):gCtx.lineTo(i*s,h-d.m*4000)); gCtx.stroke();
     }
 
-    // 5. EVENTS
     document.getElementById('audio-toggle').addEventListener('click', () => { if(!audioCtx) audioCtx=new AudioContext(); isAudioEnabled=!isAudioEnabled; if(isAudioEnabled){ audioCtx.resume(); document.getElementById('audio-toggle').innerText='🔊'; } else { audioCtx.suspend(); document.getElementById('audio-toggle').innerText='🔈'; } });
     document.getElementById('interact-btn').addEventListener('click', (e) => { interactMode=interactMode==='camera'?'spray':'camera'; e.target.innerText=interactMode==='camera'?'[ ACT: CAMERA OP. ]':'[ ACT: SPRAY SEEDS ]'; e.target.style.background=interactMode==='camera'?'transparent':'var(--glow-green)'; e.target.style.color=interactMode==='camera'?'var(--glow-green)':'var(--bg-dark)'; });
     document.getElementById('cam-mode-btn').addEventListener('click', (e) => { cameraMode=cameraMode==='orbit'?'fly':'orbit'; e.target.innerText=cameraMode==='orbit'?'[ CAM: ORBIT ]':'[ CAM: FLY ]'; if(cameraMode==='orbit') resetOrbit(); });
-    document.getElementById('mvga-btn').addEventListener('click', (e) => { isMVGA=!isMVGA; e.target.classList.toggle('active'); });
-    document.getElementById('inject-btn').addEventListener('click', randomClusters);
+    
+    document.getElementById('mvga-btn').addEventListener('click', (e) => { 
+        isMVGA=!isMVGA; 
+        e.target.classList.toggle('active'); 
+        if(isMVGA && currentDensity < 0.01) randomClusters();
+    });
+    
+    document.getElementById('inject-btn').addEventListener('click', () => randomClusters(12));
     document.getElementById('play-btn').addEventListener('click', (e) => { running=!running; e.target.innerText=running?'[ PAUSE ]':'[ PLAY ]'; });
     document.getElementById('clear-btn').addEventListener('click', () => { grid.fill(0); phosphor.fill(0); generation=0; history=[]; draw(); });
 
@@ -341,7 +343,7 @@
         if(running && t-lt > fpsInterval) { update(); draw(); lt=t; }
         renderer.render(scene, camera);
     }
-    randomClusters(); anim(0);
+    randomClusters(5); anim(0);
 </script>
 </body>
 </html>
